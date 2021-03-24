@@ -28,11 +28,16 @@ const (
 type pgid uint64
 
 type page struct {
-	id       pgid
-	flags    uint16
-	count    uint16
+	// 页id
+	id pgid
+	// flags：页类型，可以是分支，叶子节点，元信息，空闲列表
+	flags uint16
+	// 个数
+	count uint16
+	//
 	overflow uint32
-	ptr      uintptr
+	//
+	ptr uintptr
 }
 
 // typ returns a human readable page type string used for debugging.
@@ -51,12 +56,22 @@ func (p *page) typ() string {
 
 // meta returns a pointer to the metadata section of the page.
 func (p *page) meta() *meta {
+	// 将p.ptr转为meta信息
 	return (*meta)(unsafe.Pointer(&p.ptr))
 }
 
 // leafPageElement retrieves the leaf node by index
 func (p *page) leafPageElement(index uint16) *leafPageElement {
 	n := &((*[0x7FFFFFF]leafPageElement)(unsafe.Pointer(&p.ptr)))[index]
+
+	// 最原始的指针：unsafe.Pointer(&p.ptr)
+	// 将其转为(*[0x7FFFFFF]leafPageElement)(unsafe.Pointer(&p.ptr))
+	// 然后再取第index个元素 ((*[0x7FFFFFF]leafPageElement)(unsafe.Pointer(&p.ptr)))[index]
+	// 最后返回该元素指针 &((*[0x7FFFFFF]leafPageElement)(unsafe.Pointer(&p.ptr)))[index]
+
+	// ((*[0x7FFFFFF]leafPageElement)(unsafe.Pointer(&p.ptr)))
+	// (*[0x7FFFFFF]leafPageElement)(unsafe.Pointer(&p.ptr))==>[]leafPageElement
+	// &leafElements[index]
 	return n
 }
 
@@ -103,10 +118,12 @@ type branchPageElement struct {
 // key returns a byte slice of the node key.
 func (n *branchPageElement) key() []byte {
 	buf := (*[maxAllocSize]byte)(unsafe.Pointer(n))
+	// pos~ksize
 	return (*[maxAllocSize]byte)(unsafe.Pointer(&buf[n.pos]))[:n.ksize]
 }
 
 // leafPageElement represents a node on a leaf page.
+// 叶子节点既存储key，也存储value
 type leafPageElement struct {
 	flags uint32
 	pos   uint32
@@ -114,15 +131,20 @@ type leafPageElement struct {
 	vsize uint32
 }
 
+// 叶子节点的key
 // key returns a byte slice of the node key.
-func (n *leafPageElement) key() []byte {
+func (n *leafPageElement) 	key() []byte {
 	buf := (*[maxAllocSize]byte)(unsafe.Pointer(n))
+	// pos~ksize
 	return (*[maxAllocSize]byte)(unsafe.Pointer(&buf[n.pos]))[:n.ksize:n.ksize]
 }
 
+// 叶子节点的value
 // value returns a byte slice of the node value.
 func (n *leafPageElement) value() []byte {
 	buf := (*[maxAllocSize]byte)(unsafe.Pointer(n))
+	// key:pos~ksize
+	// value:pos+ksize~pos+ksize+vsize
 	return (*[maxAllocSize]byte)(unsafe.Pointer(&buf[n.pos+n.ksize]))[:n.vsize:n.vsize]
 }
 
@@ -156,6 +178,7 @@ func (a pgids) merge(b pgids) pgids {
 
 // mergepgids copies the sorted union of a and b into dst.
 // If dst is too small, it panics.
+// 将a和b按照有序合并成到dst中，a和b有序
 func mergepgids(dst, a, b pgids) {
 	if len(dst) < len(a)+len(b) {
 		panic(fmt.Errorf("mergepgids bad len %d < %d + %d", len(dst), len(a), len(b)))

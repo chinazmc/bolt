@@ -25,6 +25,7 @@ func newFreelist() *freelist {
 // size returns the size of the page after serialization.
 func (f *freelist) size() int {
 	n := f.count()
+	// 2^16=64k
 	if n >= 0xFFFF {
 		// The first element will be used to store the count. See freelist.write.
 		n++
@@ -64,6 +65,7 @@ func (f *freelist) copyall(dst []pgid) {
 
 // allocate returns the starting page id of a contiguous list of pages of a given size.
 // If a contiguous block cannot be found then 0 is returned.
+// [5,6,7,13,14,15,16,18,19,20,31,32]
 func (f *freelist) allocate(n int) pgid {
 	if len(f.ids) == 0 {
 		return 0
@@ -76,17 +78,21 @@ func (f *freelist) allocate(n int) pgid {
 		}
 
 		// Reset initial page if this is not contiguous.
+		// id-previd != 1 来判断是否连续
 		if previd == 0 || id-previd != 1 {
+			// 第一次不连续时记录一下第一个位置
 			initial = id
 		}
 
 		// If we found a contiguous block then remove it and return it.
+		// 找到了连续的块，然后将其返回即可
 		if (id-initial)+1 == pgid(n) {
 			// If we're allocating off the beginning then take the fast path
 			// and just adjust the existing slice. This will use extra memory
 			// temporarily but the append() in free() will realloc the slice
 			// as is necessary.
 			if (i + 1) == n {
+				// 找到的是前n个连续的空间
 				f.ids = f.ids[i+1:]
 			} else {
 				copy(f.ids[i-n+1:], f.ids[i+1:])
@@ -140,6 +146,7 @@ func (f *freelist) release(txid txid) {
 		}
 	}
 	sort.Sort(m)
+	// 必须保证空闲也有序
 	f.ids = pgids(f.ids).merge(m)
 }
 
@@ -166,6 +173,7 @@ func (f *freelist) read(p *page) {
 	idx, count := 0, int(p.count)
 	if count == 0xFFFF {
 		idx = 1
+		// 用第一个uint64来存储整个count的值
 		count = int(((*[maxAllocSize]pgid)(unsafe.Pointer(&p.ptr)))[0])
 	}
 
@@ -203,8 +211,10 @@ func (f *freelist) write(p *page) error {
 		p.count = uint16(lenids)
 		f.copyall(((*[maxAllocSize]pgid)(unsafe.Pointer(&p.ptr)))[:])
 	} else {
+		// 有溢出的情况下，后面第一个元素放置其长度，然后再存放所有的pgid列表
 		p.count = 0xFFFF
 		((*[maxAllocSize]pgid)(unsafe.Pointer(&p.ptr)))[0] = pgid(lenids)
+
 		f.copyall(((*[maxAllocSize]pgid)(unsafe.Pointer(&p.ptr)))[1:])
 	}
 

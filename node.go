@@ -38,9 +38,11 @@ func (n *node) minKeys() int {
 
 // size returns the size of the node after serialization.
 func (n *node) size() int {
+	// 页头+页体
 	sz, elsz := pageHeaderSize, n.pageElementSize()
 	for i := 0; i < len(n.inodes); i++ {
 		item := &n.inodes[i]
+		// 一个页体长度：elsz+len(key)+len(value)
 		sz += elsz + len(item.key) + len(item.value)
 	}
 	return sz
@@ -70,6 +72,7 @@ func (n *node) pageElementSize() int {
 }
 
 // childAt returns the child node at a given index.
+// 只有树枝节点才有孩子
 func (n *node) childAt(index int) *node {
 	if n.isLeaf {
 		panic(fmt.Sprintf("invalid childAt(%d) on a leaf node", index))
@@ -113,6 +116,8 @@ func (n *node) prevSibling() *node {
 }
 
 // put inserts a key/value.
+// 如果put的是一个key、value的话，不需要指定pgid。
+// 如果put的一个树枝节点，则需要指定pgid，不需要指定value
 func (n *node) put(oldKey, newKey, value []byte, pgid pgid, flags uint32) {
 	if pgid >= n.bucket.tx.meta.pgid {
 		panic(fmt.Sprintf("pgid (%d) above high water mark (%d)", pgid, n.bucket.tx.meta.pgid))
@@ -157,6 +162,7 @@ func (n *node) del(key []byte) {
 	n.unbalanced = true
 }
 
+// 根据page来初始化node
 // read initializes the node from a page.
 func (n *node) read(p *page) {
 	n.pgid = p.id
@@ -166,11 +172,13 @@ func (n *node) read(p *page) {
 	for i := 0; i < int(p.count); i++ {
 		inode := &n.inodes[i]
 		if n.isLeaf {
+			// 获取第i个叶子节点
 			elem := p.leafPageElement(uint16(i))
 			inode.flags = elem.flags
 			inode.key = elem.key()
 			inode.value = elem.value()
 		} else {
+			// 树枝节点
 			elem := p.branchPageElement(uint16(i))
 			inode.pgid = elem.pgid
 			inode.key = elem.key()
@@ -180,6 +188,7 @@ func (n *node) read(p *page) {
 
 	// Save first key so we can find the node in the parent when we spill.
 	if len(n.inodes) > 0 {
+		// 保存第1个元素的值
 		n.key = n.inodes[0].key
 		_assert(len(n.key) > 0, "read: zero-length node key")
 	} else {
@@ -188,6 +197,7 @@ func (n *node) read(p *page) {
 }
 
 // write writes the items onto one or more pages.
+// 将node转为page
 func (n *node) write(p *page) {
 	// Initialize page.
 	if n.isLeaf {
@@ -207,6 +217,7 @@ func (n *node) write(p *page) {
 	}
 
 	// Loop over each item and write it to the page.
+	// b指向的指针为提逃过所有item头部的位置
 	b := (*[maxAllocSize]byte)(unsafe.Pointer(&p.ptr))[n.pageElementSize()*len(n.inodes):]
 	for i, item := range n.inodes {
 		_assert(len(item.key) > 0, "write: zero-length inode key")
@@ -356,6 +367,7 @@ func (n *node) spill() error {
 	n.children = nil
 
 	// Split nodes into appropriate sizes. The first node will always be n.
+	// 将当前的node进行拆分成多个node
 	var nodes = n.split(tx.db.pageSize)
 	for _, node := range nodes {
 		// Add node's page to the freelist if it's not new.
@@ -372,10 +384,12 @@ func (n *node) spill() error {
 
 		// Write the node.
 		if p.id >= tx.meta.pgid {
+			// 不可能发生
 			panic(fmt.Sprintf("pgid (%d) above high water mark (%d)", p.id, tx.meta.pgid))
 		}
 		node.pgid = p.id
 		node.write(p)
+		// 已经拆分过了
 		node.spilled = true
 
 		// Insert into parent inodes.
@@ -385,6 +399,7 @@ func (n *node) spill() error {
 				key = node.inodes[0].key
 			}
 
+			// 放入父亲节点中
 			node.parent.put(key, node.inodes[0].key, nil, node.pgid, 0)
 			node.key = node.inodes[0].key
 			_assert(len(node.key) > 0, "spill: zero-length node key")

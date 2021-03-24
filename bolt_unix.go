@@ -23,6 +23,7 @@ func flock(db *DB, mode os.FileMode, exclusive bool, timeout time.Duration) erro
 		}
 		flag := syscall.LOCK_SH
 		if exclusive {
+			// 排他锁
 			flag = syscall.LOCK_EX
 		}
 

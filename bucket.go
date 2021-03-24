@@ -21,6 +21,7 @@ const (
 	minInt  = -maxInt - 1
 )
 
+// 16 byte
 const bucketHeaderSize = int(unsafe.Sizeof(bucket{}))
 
 const (
@@ -33,6 +34,7 @@ const (
 const DefaultFillPercent = 0.5
 
 // Bucket represents a collection of key/value pairs inside the database.
+// 一组key/value的集合，也就是一个b+树
 type Bucket struct {
 	*bucket
 	tx       *Tx                // the associated transaction
@@ -108,6 +110,7 @@ func (b *Bucket) Bucket(name []byte) *Bucket {
 	}
 
 	// Move cursor to key.
+	// 根据游标找key
 	c := b.Cursor()
 	k, v, flags := c.seek(name)
 
@@ -118,6 +121,7 @@ func (b *Bucket) Bucket(name []byte) *Bucket {
 
 	// Otherwise create a bucket and cache it.
 	var child = b.openBucket(v)
+	// 加速缓存的作用
 	if b.buckets != nil {
 		b.buckets[string(name)] = child
 	}
@@ -148,6 +152,7 @@ func (b *Bucket) openBucket(value []byte) *Bucket {
 	}
 
 	// Save a reference to the inline page if the bucket is inline.
+	// 内联桶
 	if child.root == 0 {
 		child.page = (*page)(unsafe.Pointer(&value[bucketHeaderSize]))
 	}
@@ -168,14 +173,18 @@ func (b *Bucket) CreateBucket(key []byte) (*Bucket, error) {
 	}
 
 	// Move cursor to correct position.
+	// 拿到游标
 	c := b.Cursor()
+	// 开始遍历、找到合适的位置
 	k, _, flags := c.seek(key)
 
 	// Return an error if there is an existing key.
 	if bytes.Equal(key, k) {
+		// 是桶,已经存在了
 		if (flags & bucketLeafFlag) != 0 {
 			return nil, ErrBucketExists
 		}
+		// 不是桶、但key已经存在了
 		return nil, ErrIncompatibleValue
 	}
 
@@ -189,6 +198,8 @@ func (b *Bucket) CreateBucket(key []byte) (*Bucket, error) {
 
 	// Insert into node.
 	key = cloneBytes(key)
+	// 插入到inode中
+	// c.node()方法会在内存中建立这棵树，调用n.read(page)
 	c.node().put(key, key, value, 0, bucketLeafFlag)
 
 	// Since subbuckets are not allowed on inline buckets, we need to
@@ -234,6 +245,7 @@ func (b *Bucket) DeleteBucket(key []byte) error {
 
 	// Recursively delete all child buckets.
 	child := b.Bucket(key)
+	// 将该桶下面的所有桶都删除
 	err := child.ForEach(func(k, v []byte) error {
 		if v == nil {
 			if err := child.DeleteBucket(k); err != nil {
@@ -281,7 +293,8 @@ func (b *Bucket) Get(key []byte) []byte {
 // Put sets the value for a key in the bucket.
 // If the key exist then its previous value will be overwritten.
 // Supplied value must remain valid for the life of the transaction.
-// Returns an error if the bucket was created from a read-only transaction, if the key is blank, if the key is too large, or if the value is too large.
+// Returns an error if the bucket was created from a read-only transaction,
+// if the key is blank, if the key is too large, or if the value is too large.
 func (b *Bucket) Put(key []byte, value []byte) error {
 	if b.tx.db == nil {
 		return ErrTxClosed
@@ -532,6 +545,7 @@ func (b *Bucket) spill() error {
 		var value []byte
 		if child.inlineable() {
 			child.free()
+			// 重新更新bucket的val的值
 			value = child.write()
 		} else {
 			if err := child.spill(); err != nil {
@@ -598,8 +612,10 @@ func (b *Bucket) inlineable() bool {
 		size += leafPageElementSize + len(inode.key) + len(inode.value)
 
 		if inode.flags&bucketLeafFlag != 0 {
+			// 有子桶时，不能内联
 			return false
 		} else if size > b.maxInlineBucketSize() {
+			// 如果长度大于1/4页时，就不内联了
 			return false
 		}
 	}
@@ -613,6 +629,7 @@ func (b *Bucket) maxInlineBucketSize() int {
 }
 
 // write allocates and writes a bucket to a byte slice.
+// 内联桶的话，其value中bucketHeaderSize后面的内容为其page的数据
 func (b *Bucket) write() []byte {
 	// Allocate the appropriate size.
 	var n = b.rootNode
@@ -624,6 +641,7 @@ func (b *Bucket) write() []byte {
 
 	// Convert byte slice to a fake page and write the root node.
 	var p = (*page)(unsafe.Pointer(&value[bucketHeaderSize]))
+	// 将该桶中的元素压缩存储，放在value中
 	n.write(p)
 
 	return value
@@ -640,6 +658,7 @@ func (b *Bucket) rebalance() {
 }
 
 // node creates a node from a page and associates it with a given parent.
+// 根据pgid创建一个node
 func (b *Bucket) node(pgid pgid, parent *node) *node {
 	_assert(b.nodes != nil, "nodes map expected")
 
@@ -657,13 +676,17 @@ func (b *Bucket) node(pgid pgid, parent *node) *node {
 	}
 
 	// Use the inline page if this is an inline bucket.
+	// 如果第二次进来，b.page不为空
+	// 此处的pgid和b.page只会有一个是有值的。
 	var p = b.page
+	// 说明不是内联桶
 	if p == nil {
 		p = b.tx.page(pgid)
 	}
 
 	// Read the page into the node and cache it.
 	n.read(p)
+	// 缓存
 	b.nodes[pgid] = n
 
 	// Update statistics.
@@ -705,6 +728,7 @@ func (b *Bucket) dereference() {
 func (b *Bucket) pageNode(id pgid) (*page, *node) {
 	// Inline buckets have a fake page embedded in their value so treat them
 	// differently. We'll return the rootNode (if available) or the fake page.
+	// 内联页的话，就直接返回其page了
 	if b.root == 0 {
 		if id != 0 {
 			panic(fmt.Sprintf("inline bucket non-zero page access(2): %d != 0", id))
