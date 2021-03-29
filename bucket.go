@@ -39,8 +39,8 @@ type Bucket struct {
 	*bucket
 	tx       *Tx                // the associated transaction
 	buckets  map[string]*Bucket // subbucket cache
-	page     *page              // inline page reference
-	rootNode *node              // materialized node for the root page.
+	page     *page              // inline page reference，内联页引用
+	rootNode *node              // materialized node for the root page.它存放的就是b+树的根节点
 	nodes    map[pgid]*node     // node cache
 
 	// Sets the threshold for filling nodes when they split. By default,
@@ -48,6 +48,7 @@ type Bucket struct {
 	// amount if you know that your write workloads are mostly append-only.
 	//
 	// This is non-persisted across transactions so it must be set in every Tx.
+	// 填充率
 	FillPercent float64
 }
 
@@ -120,6 +121,7 @@ func (b *Bucket) Bucket(name []byte) *Bucket {
 	}
 
 	// Otherwise create a bucket and cache it.
+	// 根据找到的value来打开桶。
 	var child = b.openBucket(v)
 	// 加速缓存的作用
 	if b.buckets != nil {
@@ -194,6 +196,7 @@ func (b *Bucket) CreateBucket(key []byte) (*Bucket, error) {
 		rootNode:    &node{isLeaf: true},
 		FillPercent: DefaultFillPercent,
 	}
+	// 拿到bucket对应的value
 	var value = bucket.write()
 
 	// Insert into node.
@@ -349,6 +352,25 @@ func (b *Bucket) Delete(key []byte) error {
 	return nil
 }
 
+
+// ForEach executes a function for each key/value pair in a bucket.
+// If the provided function returns an error then the iteration is stopped and
+// the error is returned to the caller. The provided function must not modify
+// the bucket; this will result in undefined behavior.
+func (b *Bucket) ForEach(fn func(k, v []byte) error) error {
+	if b.tx.db == nil {
+		return ErrTxClosed
+	}
+	c := b.Cursor()
+	// 遍历键值对
+	for k, v := c.First(); k != nil; k, v = c.Next() {
+		if err := fn(k, v); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // Sequence returns the current integer for the bucket without incrementing it.
 func (b *Bucket) Sequence() uint64 { return b.bucket.sequence }
 
@@ -390,22 +412,6 @@ func (b *Bucket) NextSequence() (uint64, error) {
 	return b.bucket.sequence, nil
 }
 
-// ForEach executes a function for each key/value pair in a bucket.
-// If the provided function returns an error then the iteration is stopped and
-// the error is returned to the caller. The provided function must not modify
-// the bucket; this will result in undefined behavior.
-func (b *Bucket) ForEach(fn func(k, v []byte) error) error {
-	if b.tx.db == nil {
-		return ErrTxClosed
-	}
-	c := b.Cursor()
-	for k, v := c.First(); k != nil; k, v = c.Next() {
-		if err := fn(k, v); err != nil {
-			return err
-		}
-	}
-	return nil
-}
 
 // Stat returns stats on a bucket.
 func (b *Bucket) Stats() BucketStats {

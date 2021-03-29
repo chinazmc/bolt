@@ -9,15 +9,15 @@ import (
 
 // node represents an in-memory, deserialized page.
 type node struct {
-	bucket     *Bucket
+	bucket     *Bucket // 关联一个桶
 	isLeaf     bool
-	unbalanced bool
-	spilled    bool
-	key        []byte
-	pgid       pgid
-	parent     *node
-	children   nodes
-	inodes     inodes
+	unbalanced bool   // 值为true的话，需要考虑页合并
+	spilled    bool   // 值为true的话，需要考虑页分裂
+	key        []byte // 对于分支节点的话，保留的是最小的key
+	pgid       pgid   // 分支节点关联的页id
+	parent     *node  // 该节点的parent
+	children   nodes  // 该节点的孩子节点
+	inodes     inodes // 该节点上保存的索引数据
 }
 
 // root returns the top-level node this node is attached to.
@@ -71,14 +71,7 @@ func (n *node) pageElementSize() int {
 	return branchPageElementSize
 }
 
-// childAt returns the child node at a given index.
-// 只有树枝节点才有孩子
-func (n *node) childAt(index int) *node {
-	if n.isLeaf {
-		panic(fmt.Sprintf("invalid childAt(%d) on a leaf node", index))
-	}
-	return n.bucket.node(n.inodes[index].pgid, n)
-}
+
 
 // childIndex returns the index of a given child node.
 func (n *node) childIndex(child *node) int {
@@ -92,6 +85,7 @@ func (n *node) numChildren() int {
 }
 
 // nextSibling returns the next node with the same parent.
+// 返回下一个兄弟节点
 func (n *node) nextSibling() *node {
 	if n.parent == nil {
 		return nil
@@ -104,15 +98,27 @@ func (n *node) nextSibling() *node {
 }
 
 // prevSibling returns the previous node with the same parent.
+// 返回上一个兄弟节点
 func (n *node) prevSibling() *node {
 	if n.parent == nil {
 		return nil
 	}
+	// 首先找下标
 	index := n.parent.childIndex(n)
 	if index == 0 {
 		return nil
 	}
+	// 然后返回
 	return n.parent.childAt(index - 1)
+}
+
+// childAt returns the child node at a given index.
+// 只有树枝节点才有孩子
+func (n *node) childAt(index int) *node {
+	if n.isLeaf {
+		panic(fmt.Sprintf("invalid childAt(%d) on a leaf node", index))
+	}
+	return n.bucket.node(n.inodes[index].pgid, n)
 }
 
 // put inserts a key/value.
@@ -167,6 +173,7 @@ func (n *node) del(key []byte) {
 func (n *node) read(p *page) {
 	n.pgid = p.id
 	n.isLeaf = ((p.flags & leafPageFlag) != 0)
+	// 一个inodes对应一个xxxPageElement对象
 	n.inodes = make(inodes, int(p.count))
 
 	for i := 0; i < int(p.count); i++ {
@@ -200,12 +207,14 @@ func (n *node) read(p *page) {
 // 将node转为page
 func (n *node) write(p *page) {
 	// Initialize page.
+	// 判断是否是叶子节点还是非叶子节点
 	if n.isLeaf {
 		p.flags |= leafPageFlag
 	} else {
 		p.flags |= branchPageFlag
 	}
 
+	// 这儿叶子节点不可能溢出，因为溢出时，会分裂
 	if len(n.inodes) >= 0xFFFF {
 		panic(fmt.Sprintf("inode overflow: %d (pgid=%d)", len(n.inodes), p.id))
 	}
@@ -223,6 +232,7 @@ func (n *node) write(p *page) {
 		_assert(len(item.key) > 0, "write: zero-length inode key")
 
 		// Write the page element.
+		// 写入叶子节点数据
 		if n.isLeaf {
 			elem := p.leafPageElement(uint16(i))
 			elem.pos = uint32(uintptr(unsafe.Pointer(&b[0])) - uintptr(unsafe.Pointer(elem)))
@@ -230,6 +240,7 @@ func (n *node) write(p *page) {
 			elem.ksize = uint32(len(item.key))
 			elem.vsize = uint32(len(item.value))
 		} else {
+			// 写入分支节点数据
 			elem := p.branchPageElement(uint16(i))
 			elem.pos = uint32(uintptr(unsafe.Pointer(&b[0])) - uintptr(unsafe.Pointer(elem)))
 			elem.ksize = uint32(len(item.key))
@@ -284,6 +295,7 @@ func (n *node) split(pageSize int) []*node {
 func (n *node) splitTwo(pageSize int) (*node, *node) {
 	// Ignore the split if the page doesn't have at least enough nodes for
 	// two pages or if the nodes can fit in a single page.
+	// 太小的话，就不拆分了
 	if len(n.inodes) <= (minKeysPerPage*2) || n.sizeLessThan(pageSize) {
 		return n, nil
 	}
@@ -307,6 +319,7 @@ func (n *node) splitTwo(pageSize int) (*node, *node) {
 	}
 
 	// Create a new node and add it to the parent.
+	// 拆分出一个新节点
 	next := &node{bucket: n.bucket, isLeaf: n.isLeaf, parent: n.parent}
 	n.parent.children = append(n.parent.children, next)
 
@@ -323,6 +336,7 @@ func (n *node) splitTwo(pageSize int) (*node, *node) {
 // splitIndex finds the position where a page will fill a given threshold.
 // It returns the index as well as the size of the first page.
 // This is only be called from split().
+// 找到合适的index
 func (n *node) splitIndex(threshold int) (index, sz int) {
 	sz = pageHeaderSize
 
@@ -421,6 +435,7 @@ func (n *node) spill() error {
 
 // rebalance attempts to combine the node with sibling nodes if the node fill
 // size is below a threshold or if there are not enough keys.
+// 填充率太低或者没有足够的key时，进行页合并
 func (n *node) rebalance() {
 	if !n.unbalanced {
 		return
@@ -476,6 +491,7 @@ func (n *node) rebalance() {
 
 	// Destination node is right sibling if idx == 0, otherwise left sibling.
 	var target *node
+	// 判断当前node是否是parent的第一个孩子节点，是的话，就要找它的下一个兄弟节点，否则的话，就找上一个兄弟节点
 	var useNextSibling = (n.parent.childIndex(n) == 0)
 	if useNextSibling {
 		target = n.nextSibling()
@@ -484,12 +500,16 @@ func (n *node) rebalance() {
 	}
 
 	// If both this node and the target node are too small then merge them.
+	// 合并当前node和target，target合到node
 	if useNextSibling {
 		// Reparent all child nodes being moved.
 		for _, inode := range target.inodes {
 			if child, ok := n.bucket.nodes[inode.pgid]; ok {
+				// 之前的父亲移除该孩子
 				child.parent.removeChild(child)
+				// 重新指定父亲节点
 				child.parent = n
+				// 父亲节点指当前孩子
 				child.parent.children = append(child.parent.children, child)
 			}
 		}
@@ -501,6 +521,7 @@ func (n *node) rebalance() {
 		delete(n.bucket.nodes, target.pgid)
 		target.free()
 	} else {
+		// node合到targett
 		// Reparent all child nodes being moved.
 		for _, inode := range n.inodes {
 			if child, ok := n.bucket.nodes[inode.pgid]; ok {
@@ -610,9 +631,12 @@ func (s nodes) Less(i, j int) bool { return bytes.Compare(s[i].inodes[0].key, s[
 // It can be used to point to elements in a page or point
 // to an element which hasn't been added to a page yet.
 type inode struct {
+	// 表示是否是子桶叶子节点还是普通叶子节点。如果flags值为1表示子桶叶子节点，否则为普通叶子节点
 	flags uint32
-	pgid  pgid
-	key   []byte
+	// 当inode为分支元素时，pgid才有值，为叶子元素时，则没值
+	pgid pgid
+	key  []byte
+	// 当inode为分支元素时，value为空，为叶子元素时，才有值
 	value []byte
 }
 

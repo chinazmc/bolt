@@ -66,7 +66,7 @@ func (n *leafPageElement) value() []byte {
 }
 
 func main() {
-	// testBoltdb()
+	testBoltdb()
 
 	// testUnsafeMethod()
 

@@ -35,8 +35,10 @@ func (c *Cursor) First() (key []byte, value []byte) {
 	c.stack = c.stack[:0]
 	p, n := c.bucket.pageNode(c.bucket.root)
 
+	// 一直找到第一个叶子节点，此处在天添加stack时，一直让index设置为0即可
 	ref := elemRef{page: p, node: n, index: 0}
 	c.stack = append(c.stack, ref)
+
 
 	c.first()
 
@@ -66,6 +68,7 @@ func (c *Cursor) Last() (key []byte, value []byte) {
 	p, n := c.bucket.pageNode(c.bucket.root)
 
 	ref := elemRef{page: p, node: n}
+	// 设置其index为当前页元素的最后一个
 	ref.index = ref.count() - 1
 	c.stack = append(c.stack, ref)
 
@@ -101,6 +104,7 @@ func (c *Cursor) Prev() (key []byte, value []byte) {
 	for i := len(c.stack) - 1; i >= 0; i-- {
 		elem := &c.stack[i]
 		if elem.index > 0 {
+			// 往前移动一格
 			elem.index--
 			break
 		}
@@ -113,6 +117,7 @@ func (c *Cursor) Prev() (key []byte, value []byte) {
 	}
 
 	// Move down the stack to find the last element of the last leaf under this branch.
+	// 如果当前节点是叶子节点的话，则直接退出了，啥都不做。否则的话移动到新页的最后一个节点
 	c.last()
 	k, v, flags := c.keyValue()
 	if (flags & uint32(bucketLeafFlag)) != 0 {
@@ -135,6 +140,7 @@ func (c *Cursor) Delete() error {
 	if (flags & bucketLeafFlag) != 0 {
 		return ErrIncompatibleValue
 	}
+	// 从node中移除，本质上将inode数组进行移动
 	c.node().del(key)
 
 	return nil
@@ -241,6 +247,7 @@ func (c *Cursor) next() (key []byte, value []byte, flags uint32) {
 		for i = len(c.stack) - 1; i >= 0; i-- {
 			elem := &c.stack[i]
 			if elem.index < elem.count()-1 {
+				// 元素还有时，往后移动一个
 				elem.index++
 				break
 			}
@@ -249,6 +256,7 @@ func (c *Cursor) next() (key []byte, value []byte, flags uint32) {
 
 		// If we've hit the root page then stop and return. This will leave the
 		// cursor on the last element of the last page.
+		// 所有页都遍历完了
 		if i == -1 {
 			return nil, nil, 0
 		}
@@ -257,8 +265,8 @@ func (c *Cursor) next() (key []byte, value []byte, flags uint32) {
 		// first element of the first leaf page.
 		// 剩余的节点里面找，跳过原先遍历过的节点
 		c.stack = c.stack[:i+1]
-		// 如果是叶子节点，啥都不做。直接返回elem.index+1的数据
-		// 非叶子节点的话，需要移动到第一个
+		// 如果是叶子节点，first()啥都不做，直接退出。返回elem.index+1的数据
+		// 非叶子节点的话，需要移动到stack中最后一个路径的第一个元素
 		c.first()
 
 		// If this is an empty page then restart and move back up the stack.

@@ -1025,10 +1025,6 @@ func (m *meta) validate() error {
 	return nil
 }
 
-// copy copies one meta object to another.
-func (m *meta) copy(dest *meta) {
-	*dest = *m
-}
 
 // write writes the meta onto a page.
 func (m *meta) write(p *page) {
@@ -1047,6 +1043,12 @@ func (m *meta) write(p *page) {
 
 	m.copy(p.meta())
 }
+
+// copy copies one meta object to another.
+func (m *meta) copy(dest *meta) {
+	*dest = *m
+}
+
 
 // generates the checksum for the meta.
 func (m *meta) sum64() uint64 {

@@ -7,6 +7,7 @@ import (
 	"unsafe"
 )
 
+// 16字节
 const pageHeaderSize = int(unsafe.Offsetof(((*page)(nil)).ptr))
 
 const minKeysPerPage = 2
@@ -28,13 +29,13 @@ const (
 type pgid uint64
 
 type page struct {
-	// 页id
+	// 页id 8字节
 	id pgid
-	// flags：页类型，可以是分支，叶子节点，元信息，空闲列表
+	// flags：页类型，可以是分支，叶子节点，元信息，空闲列表  2字节
 	flags uint16
-	// 个数
+	// 个数 2字节
 	count uint16
-	//
+	// 4字节
 	overflow uint32
 	//
 	ptr uintptr
