@@ -559,6 +559,7 @@ func (b *Bucket) spill() error {
 			}
 
 			// Update the child bucket header in this bucket.
+			// 记录value
 			value = make([]byte, unsafe.Sizeof(bucket{}))
 			var bucket = (*bucket)(unsafe.Pointer(&value[0]))
 			*bucket = *child.bucket
@@ -578,6 +579,7 @@ func (b *Bucket) spill() error {
 		if flags&bucketLeafFlag == 0 {
 			panic(fmt.Sprintf("unexpected bucket header flag: %x", flags))
 		}
+		// 更新子桶的value
 		c.node().put([]byte(name), []byte(name), value, 0, bucketLeafFlag)
 	}
 

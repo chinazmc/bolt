@@ -391,6 +391,7 @@ func (n *node) spill() error {
 		}
 
 		// Allocate contiguous space for the node.
+		// 给node分配连续的空间
 		p, err := tx.allocate((node.size() / tx.db.pageSize) + 1)
 		if err != nil {
 			return err

@@ -21,6 +21,7 @@ type txid uint64
 // them. Pages can not be reclaimed by the writer until no more transactions
 // are using them. A long running read transaction can cause the database to
 // quickly grow.
+// Tx 主要封装了读事务和写事务。其中通过writable来区分是读事务还是写事务
 type Tx struct {
 	writable       bool
 	managed        bool
@@ -29,6 +30,7 @@ type Tx struct {
 	root           Bucket
 	pages          map[pgid]*page
 	stats          TxStats
+	// 提交时执行的动作
 	commitHandlers []func()
 
 	// WriteFlag specifies the flag for write-related methods like WriteTo().
@@ -144,6 +146,8 @@ func (tx *Tx) OnCommit(fn func()) {
 // Commit writes all changes to disk and updates the meta page.
 // Returns an error if a disk write error occurs, or if Commit is
 // called on a read-only transaction.
+
+// 先更新数据还是先更新元信息？
 func (tx *Tx) Commit() error {
 	_assert(!tx.managed, "managed tx commit not allowed")
 	if tx.db == nil {
@@ -162,7 +166,7 @@ func (tx *Tx) Commit() error {
 		tx.stats.RebalanceTime += time.Since(startTime)
 	}
 
-	// 页分裂
+	// 页分裂，先将node进行分裂，否则的话数据就会有溢出的风险
 	// spill data onto dirty pages.
 	startTime = time.Now()
 	// 这个内部会往缓存tx.pages中加page
@@ -181,12 +185,13 @@ func (tx *Tx) Commit() error {
 	// the size of the freelist but not underestimate the size (which would be bad).
 	// 分配新的页面给freelist，然后将freelist写入新的页面
 	tx.db.freelist.free(tx.meta.txid, tx.db.page(tx.meta.freelist))
+	// 空闲列表可能会增加，因此需要重新分配页用来存储空闲列表
 	p, err := tx.allocate((tx.db.freelist.size() / tx.db.pageSize) + 1)
 	if err != nil {
 		tx.rollback()
 		return err
 	}
-	// 将freelist写入到新页中
+	// 将freelist写入到连续的新页中
 	if err := tx.db.freelist.write(p); err != nil {
 		tx.rollback()
 		return err
@@ -263,7 +268,9 @@ func (tx *Tx) rollback() {
 		return
 	}
 	if tx.writable {
+		// 移除该事务关联的pages
 		tx.db.freelist.rollback(tx.meta.txid)
+		// 重新从freelist页中读取构建空闲列表
 		tx.db.freelist.reload(tx.db.page(tx.db.meta().freelist))
 	}
 	tx.close()
@@ -467,6 +474,7 @@ func (tx *Tx) checkBucket(b *Bucket, reachable map[pgid]*page, freed map[pgid]bo
 }
 
 // allocate returns a contiguous block of memory starting at a given page.
+// 分配一段连续的页
 func (tx *Tx) allocate(count int) (*page, error) {
 	p, err := tx.db.allocate(count)
 	if err != nil {
@@ -486,6 +494,7 @@ func (tx *Tx) allocate(count int) (*page, error) {
 // write writes any dirty pages to disk.
 func (tx *Tx) write() error {
 	// Sort pages by id.
+	// 保证写的页是有序的
 	pages := make(pages, 0, len(tx.pages))
 	for _, p := range tx.pages {
 		pages = append(pages, p)
@@ -502,7 +511,7 @@ func (tx *Tx) write() error {
 
 		// Write out page in "max allocation" sized chunks.
 		ptr := (*[maxAllocSize]byte)(unsafe.Pointer(p))
-		// 循环写
+		// 循环写某一页
 		for {
 			// Limit our write to our max allocation size.
 			sz := size
@@ -567,6 +576,7 @@ func (tx *Tx) writeMeta() error {
 	// Create a temporary buffer for the meta page.
 	buf := make([]byte, tx.db.pageSize)
 	p := tx.db.pageInBuffer(buf, 0)
+	// 将事务的元信息写入到页中
 	tx.meta.write(p)
 
 	// Write the meta page to file.
@@ -644,27 +654,27 @@ func (tx *Tx) Page(id int) (*PageInfo, error) {
 
 // TxStats represents statistics about the actions performed by the transaction.
 type TxStats struct {
-	// Page statistics.
+	// Page statistics. 页统计
 	PageCount int // number of page allocations
 	PageAlloc int // total bytes allocated
 
-	// Cursor statistics.
+	// Cursor statistics. 游标统计
 	CursorCount int // number of cursors created
 
-	// Node statistics
+	// Node statistics 节点统计
 	NodeCount int // number of node allocations
 	NodeDeref int // number of node dereferences
 
-	// Rebalance statistics.
+	// Rebalance statistics. 合并统计
 	Rebalance     int           // number of node rebalances
 	RebalanceTime time.Duration // total time spent rebalancing
 
-	// Split/Spill statistics.
+	// Split/Spill statistics. 分裂统计
 	Split     int           // number of nodes split
 	Spill     int           // number of nodes spilled
 	SpillTime time.Duration // total time spent spilling
 
-	// Write statistics.
+	// Write statistics. 刷盘统计
 	Write     int           // number of writes performed
 	WriteTime time.Duration // total time spent writing to disk
 }

@@ -35,7 +35,7 @@ func (c *Cursor) First() (key []byte, value []byte) {
 	c.stack = c.stack[:0]
 	p, n := c.bucket.pageNode(c.bucket.root)
 
-	// 一直找到第一个叶子节点，此处在天添加stack时，一直让index设置为0即可
+	// 一直找到第一个叶子节点，此处在添加stack时，一直让index设置为0即可
 	ref := elemRef{page: p, node: n, index: 0}
 	c.stack = append(c.stack, ref)
 

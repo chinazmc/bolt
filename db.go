@@ -96,7 +96,7 @@ type DB struct {
 	AllocSize int
 
 	path     string
-	file     *os.File
+	file     *os.File  // 真实存储数据的磁盘文件
 	lockfile *os.File // windows only
 	dataref  []byte   // mmap'ed readonly, write throws SEGV
 	// 通过mmap映射进来的地址
@@ -109,9 +109,9 @@ type DB struct {
 
 	pageSize int
 	opened   bool
-	rwtx     *Tx
-	txs      []*Tx
-	freelist *freelist
+	rwtx     *Tx  // 写事务锁
+	txs      []*Tx  // 读事务数组
+	freelist *freelist // 空闲列表
 	stats    Stats
 
 	pagePool sync.Pool
@@ -189,7 +189,7 @@ func Open(path string, mode os.FileMode, options *Options) (*DB, error) {
 	// The database file is locked using the shared lock (more than one process may
 	// hold a lock at the same time) otherwise (options.ReadOnly is set).
 
-	// 不是只读，加锁
+	// 只读加共享锁、否则加互斥锁
 	if err := flock(db, mode, !db.readOnly, options.Timeout); err != nil {
 		_ = db.close()
 		return nil, err
@@ -558,7 +558,7 @@ func (db *DB) beginRWTx() (*Tx, error) {
 		}
 	}
 	if minid > 0 {
-		// 将之前事务关联的page全部释放了
+		// 将之前事务关联的page全部释放了，因为在只读事务中，没法释放，只读事务的页，因为可能当前的事务已经完成 ，但实际上其他的读事务还在用
 		db.freelist.release(minid - 1)
 	}
 
